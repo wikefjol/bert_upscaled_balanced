@@ -1,0 +1,60 @@
+# Byte-compiled / optimized / compiled files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Ignore wandb logs and generated files
+wandb/
+
+# Ignore generated vocab plots
+vocab_plots/
+
+# Ignore logs and debugging output
+logs/
+
+
+# Ignore the vocabs directory (empty for now)
+vocabs/
+
+# Ignore sbatch scripts
+x_*.sh
+*.sh
+
+# C extensions
+*.so
+
+# Virtual environments
+venv/
+env/
+.env
+
+# Jupyter Notebook checkpoints
+.ipynb_checkpoints
+
+# Output directories (e.g., runs with data and plots)
+runs/
+
+# Data files
+data/*.fasta
+data/vocab.json
+
+# System-specific files
+.DS_Store
+Thumbs.db
+
+# Configurations specific to IDEs
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Python package files
+*.egg-info/
+*.egg
+dist/
+build/
+
+# Temporary files
+*.bak
+*.tmp
+*.old

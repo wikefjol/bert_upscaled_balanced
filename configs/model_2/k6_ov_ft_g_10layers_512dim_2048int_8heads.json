@@ -1,0 +1,60 @@
+{
+    "DATA_FILE": "unite_reps.fasta",
+    "PROJECT_NAME": "gold_standard_ft",
+    "small_set": false,
+    "n_test": 1000,
+    "alphabet": [
+        "A",
+        "C",
+        "G",
+        "T"
+    ],
+    "max_sequence_length": 600,
+    "target_labels": [
+        "genus"
+    ],
+    "model": {
+        "num_layers": 10,
+        "num_attention_heads": 8,
+        "hidden_size": 512,
+        "intermediate_size": 2048,
+        "dropout_rate": 0.05,
+        "mlm_dropout_rate": 0.1
+    },
+    "preprocessing": {
+        "tokenization": {
+            "strategy": "kmer",
+            "k": 6,
+            "overlapping": true
+        },
+        "padding": {
+            "strategy": "end"
+        },
+        "truncation": {
+            "strategy": "slidingwindow"
+        },
+        "augmentation": {
+            "training": {
+                "strategy": "base",
+                "modification_probability": 0.05
+            },
+            "evaluation": {
+                "strategy": "identity"
+            }
+        }
+    },
+    "max_epochs": {
+        "fine_tuning": 20
+    },
+    "patience": {
+        "fine_tuning": 10
+    },
+    "peak_lr": 0.0005,
+    "warmup_epochs": 1,
+    "plateau_epochs": 3,
+    "decay_epochs": 3,
+    "accumulation_steps": 1,
+    "batch_size": 1280,
+    "test_size": 0.1,
+    "system_log_lvl": 20
+}
