@@ -3,6 +3,8 @@ import torch.nn as nn
 import torch.optim as optim
 from transformers import get_cosine_schedule_with_warmup
 from src.train.trainers_base import BaseTrainer
+from sklearn.metrics import f1_score, balanced_accuracy_score
+import numpy as np
 from tqdm import tqdm
 
 class ClassificationTrainer(BaseTrainer):
@@ -56,20 +58,29 @@ class ClassificationTrainer(BaseTrainer):
 
     def _validate_epoch(self, epoch_nr):
         self.model.eval()
-        total_loss, correct, total = 0.0, 0, 0
+        total_loss = 0.0
+        all_preds, all_labels = [], []
         progress_bar = tqdm(self.val_loader, desc=f"Validation Epoch {epoch_nr+1}", leave=False)
-
         with torch.no_grad():
             for batch in progress_bar:
                 input_ids = batch["input_ids"].to(self.device)
                 attention_mask = batch["attention_mask"].to(self.device)
-                labels = batch["encoded_label"].to(self.device).long()  # Ensure labels are of type long
+                labels = batch["encoded_label"].to(self.device).long()
                 logits = self.model(input_ids, attention_mask)
                 loss = self.criterion(logits, labels)
                 total_loss += loss.item()
-                correct += (logits.argmax(dim=-1) == labels).sum().item()
-                total += len(labels)
-
+                preds = logits.argmax(dim=-1)
+                all_preds.extend(preds.cpu().numpy())
+                all_labels.extend(labels.cpu().numpy())
         avg_loss = total_loss / len(self.val_loader)
-        accuracy = correct / total if total > 0 else 0.0
-        return {"loss": avg_loss, "accuracy": accuracy}
+        accuracy = np.mean(np.array(all_preds) == np.array(all_labels))
+        macro_f1 = f1_score(all_labels, all_preds, average="macro")
+        weighted_f1 = f1_score(all_labels, all_preds, average="weighted")
+        bal_acc = balanced_accuracy_score(all_labels, all_preds)
+        return {
+            "loss": avg_loss,
+            "accuracy": accuracy,
+            "macro_f1": macro_f1,
+            "weighted_f1": weighted_f1,
+            "balanced_accuracy": bal_acc,
+    }

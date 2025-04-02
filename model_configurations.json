@@ -95,7 +95,7 @@
         "3": { "batch_size": 1124, "peak_lr": 0.0005 },
         "4": { "batch_size": 1584, "peak_lr": 0.0005 },
         "5": { "batch_size": 2000, "peak_lr": 0.0005 },
-        "6": { "batch_size": 2, "peak_lr": 0.0005 },
+        "6": { "batch_size": 2124, "peak_lr": 0.0005 },
         "7": { "batch_size": 1508, "peak_lr": 0.0005 }
       }
     }

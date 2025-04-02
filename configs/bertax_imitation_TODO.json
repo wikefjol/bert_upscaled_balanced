@@ -1,6 +1,6 @@
 {
     "DATA_FILE": "unite_reps.fasta",
-    "PROJECT_NAME": "gold_standard_ft",
+    "PROJECT_NAME": "gold_standard_pt",
     "small_set": false,
     "n_test": 1000,
     "alphabet": [
@@ -14,8 +14,8 @@
         "genus"
     ],
     "model": {
-        "num_layers": 10,
-        "num_attention_heads": 8,
+        "num_layers": 12,
+        "num_attention_heads": 4,
         "hidden_size": 512,
         "intermediate_size": 2048,
         "dropout_rate": 0.05,
@@ -25,7 +25,7 @@
         "tokenization": {
             "strategy": "kmer",
             "k": 3,
-            "overlapping": true
+            "overlapping": false
         },
         "padding": {
             "strategy": "end"
@@ -44,17 +44,20 @@
         }
     },
     "max_epochs": {
-        "fine_tuning": 10
+        "pre_training": 600,
+        "fine_tuning": 0
     },
     "patience": {
-        "fine_tuning": 4
+        "pre_training": 10,
+        "fine_tuning": 10
     },
-    "peak_lr": 0.0005,
-    "warmup_epochs": 1,
-    "plateau_epochs": 3,
-    "decay_epochs": 3,
+    "peak_lr": 0.0015,
+    "warmup_epochs": 3,
+    "plateau_epochs": 50,
+    "decay_epochs": 500,
+    "batch_size": 1124,
     "accumulation_steps": 1,
-    "batch_size": 768,
+    "masking_percentage": 0.15,
     "test_size": 0.1,
     "system_log_lvl": 20
 }

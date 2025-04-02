@@ -1,3 +1,5 @@
+# base_trainer.py:
+
 import os
 import json
 import time
@@ -62,24 +64,22 @@ class BaseTrainer(ABC):
         self.earliest_stop_epoch = earliest_stop_epoch
         self.config = kwargs.get("config", {})
 
-        # Use model.mode == 'pretrain' or 'finetune' to decide champion metric
-        # Pretrain => val_loss (lower is better)
-        # Finetune => val_accuracy (higher is better)
+        # Decide champion metric based on mode
         if self.model.mode == "pretrain":
             self.champion_metric_name = "val_loss"
             self.best_metric = float("inf")
             self.compare_fn = lambda new, old: (old - new) > self.min_delta
-        else:  # self.model.mode == "classify"
+        else:  # e.g. self.model.mode == "classify"
             self.champion_metric_name = "val_accuracy"
             self.best_metric = float("-inf")
             self.compare_fn = lambda new, old: (new - old) > self.min_delta
 
-        # Build champion_key once, e.g. "pretrain_k2_overlap_10layers_8heads_512hidden_2048intermediate"
+        # Build champion_key once, e.g. "pretrain_k2_overlap_..."
         self.champion_key = build_champion_key(self.model.mode, self.config)
         # Path to JSON where we store champion metadata
         self.metadata_path = os.path.join(self.champs_dir, "champions.json")
 
-        # Mixed precision scaler
+        # Mixed precision
         if self.use_amp:
             self.scaler = torch.cuda.amp.GradScaler()
         else:
@@ -98,6 +98,7 @@ class BaseTrainer(ABC):
         """
         Implement the validation loop for one epoch.
         Return a dict with at least {"loss": float, "accuracy": float}.
+        Optionally more keys, e.g. {"macro_f1": float, "balanced_accuracy": float, ...}.
         """
         pass
 
@@ -109,7 +110,6 @@ class BaseTrainer(ABC):
           - champion logic
           - early stopping
         """
-        # 'mlm' or 'cls' prefix for logging
         task_prefix = "mlm" if self.model.mode == "pretrain" else "cls"
 
         for epoch in range(self.num_epochs):
@@ -121,7 +121,7 @@ class BaseTrainer(ABC):
 
             # Validation every self.val_interval epochs
             if (epoch + 1) % self.val_interval == 0:
-                # VRAM usage (CUDA only)
+                # VRAM usage
                 if torch.cuda.is_available():
                     device = torch.device("cuda")
                     allocated = torch.cuda.memory_allocated(device)
@@ -138,6 +138,11 @@ class BaseTrainer(ABC):
                 val_accuracy = val_metrics.get("accuracy", 0.0)
                 grad_norm = val_metrics.get("grad_norm", -1)
 
+                # Fetch any additional classification metrics if present
+                val_macro_f1 = val_metrics.get("macro_f1", None)
+                val_weighted_f1 = val_metrics.get("weighted_f1", None)
+                val_bal_acc = val_metrics.get("balanced_accuracy", None)
+
                 # Print header every 5 validation cycles
                 if (epoch % 5) == 0:
                     print("")
@@ -149,15 +154,25 @@ class BaseTrainer(ABC):
                     print(header)
                     print("-" * len(header))
 
+                # Construct row for main metrics
                 row = (
                     f"{epoch+1:<6} | {train_metrics['loss']:<10.4f} | {train_metrics['accuracy']:<10.4f} | "
                     f"{val_loss:<10.4f} | {val_accuracy:<10.4f} | {current_lr:<8.6f} | "
                     f"{(val_end - train_start):<14.2f} | {vram_percent:<10.2f}%"
                 )
+
+                # Optionally append extra classification metrics on the same line
+                if val_macro_f1 is not None:
+                    row += f" | macroF1: {val_macro_f1:.4f}"
+                if val_weighted_f1 is not None:
+                    row += f" | weightedF1: {val_weighted_f1:.4f}"
+                if val_bal_acc is not None:
+                    row += f" | balAcc: {val_bal_acc:.4f}"
+
                 print(row)
 
-                # Log to Weights & Biases
-                wandb.log({
+                # Prepare WandB log dictionary
+                wb_dict = {
                     "epoch": epoch + 1,
                     f"train_{task_prefix}_loss": train_metrics["loss"],
                     f"train_{task_prefix}_accuracy": train_metrics["accuracy"],
@@ -165,24 +180,29 @@ class BaseTrainer(ABC):
                     f"val_{task_prefix}_accuracy": val_accuracy,
                     "learning_rate": current_lr,
                     "grad_norm": grad_norm
-                })
+                }
+                # Add classification metrics if present
+                if val_macro_f1 is not None:
+                    wb_dict[f"val_{task_prefix}_macro_f1"] = val_macro_f1
+                if val_weighted_f1 is not None:
+                    wb_dict[f"val_{task_prefix}_weighted_f1"] = val_weighted_f1
+                if val_bal_acc is not None:
+                    wb_dict[f"val_{task_prefix}_balanced_acc"] = val_bal_acc
 
-                # Determine champion metric for this epoch
+                # Log to Weights & Biases
+                wandb.log(wb_dict)
+
+                # Determine champion metric
                 if self.model.mode == "pretrain":
-                    # use val_loss
                     current_metric = val_loss
                 else:
-                    # finetune => val_accuracy
                     current_metric = val_accuracy
 
-                # Check improvement if we've reached earliest_champion_epoch
+                # Champion logic
                 if (epoch + 1) >= self.earliest_champion_epoch:
                     if self.compare_fn(current_metric, self.best_metric):
-                        # We have a new best
                         self.best_metric = current_metric
                         self.no_improvement_count = 0
-
-                        # Save champion
                         checkpoint_path, config_path = save_champion(
                             self.model,
                             self.config,
@@ -190,7 +210,6 @@ class BaseTrainer(ABC):
                             self.champion_key,
                             self.champs_dir
                         )
-                        # Update champion metadata
                         update_champion_metadata(
                             metadata_path=self.metadata_path,
                             champion_key=self.champion_key,
@@ -203,11 +222,10 @@ class BaseTrainer(ABC):
                         )
                         self.logger.info(f"Champion updated for {self.champion_key} at epoch {epoch+1}")
                     else:
-                        # No improvement
                         self.no_improvement_count += 1
 
             else:
-                # If we skip validation, just log training metrics
+                # If we skip validation, just log training metrics to WandB
                 grad_norm = -2
                 wandb.log({
                     "epoch": epoch + 1,
@@ -234,8 +252,7 @@ class BaseTrainer(ABC):
             torch.cuda.empty_cache()
             gc.collect()
 
-            # --- Early Stopping Condition ---
-            # Only check on validation epochs + after earliest_stop_epoch
+            # Early stopping
             if (
                 (epoch + 1) % self.val_interval == 0
                 and (epoch + 1) >= self.earliest_stop_epoch

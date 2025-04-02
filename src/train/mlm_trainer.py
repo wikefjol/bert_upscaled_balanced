@@ -66,7 +66,7 @@ class MLMTrainer(BaseTrainer):
                 if p.grad is not None:
                     total_norm += p.grad.data.norm(2).item() ** 2
             total_norm = total_norm ** 0.5
-            print(f"Gradient norm before optimizer step: {total_norm:.4f}")
+            #print(f"Gradient norm before optimizer step: {total_norm:.4f}")
 ##########################################################################################
 
             # Gradient accumulation: perform optimizer step every accumulation_steps iterations

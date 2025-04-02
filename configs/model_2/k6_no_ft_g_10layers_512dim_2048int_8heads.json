@@ -44,17 +44,17 @@
         }
     },
     "max_epochs": {
-        "fine_tuning": 20
+        "fine_tuning": 10
     },
     "patience": {
-        "fine_tuning": 10
+        "fine_tuning": 4
     },
     "peak_lr": 0.0005,
     "warmup_epochs": 1,
     "plateau_epochs": 3,
     "decay_epochs": 3,
     "accumulation_steps": 1,
-    "batch_size": 2,
+    "batch_size": 2124,
     "test_size": 0.1,
     "system_log_lvl": 20
 }

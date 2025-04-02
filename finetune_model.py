@@ -3,11 +3,15 @@ import os
 import json
 import logging
 import argparse
+import pandas as pd
 import torch
 from sklearn.model_selection import train_test_split
 from torch.utils.data import DataLoader
 from transformers import BertConfig, BertModel
 from dotenv import load_dotenv
+import numpy as np
+from torch.utils.data import WeightedRandomSampler
+
 import wandb
 
 from src.train.classification_trainer import ClassificationTrainer
@@ -86,6 +90,10 @@ def main():
     parser.add_argument("--config", type=str, required=True, help="Path to finetuning config JSON")
     args = parser.parse_args()
 
+    # TODO: Adapt configs to take in these paths. Or dont. 
+    train_path = "/mimer/NOBACKUP/groups/snic2022-22-552/filbern/data/naive_train.csv"
+    val_path = "/mimer/NOBACKUP/groups/snic2022-22-552/filbern/data/naive_val.csv"
+
     # Load and expand config
     with open(args.config, "r") as f:
         config = json.load(f)
@@ -105,33 +113,49 @@ def main():
     logging.info("Building preprocessor for finetuning")
     preprocessor = create_preprocessor(config["preprocessing"], vocab, training=True)
 
-    # --- Load & Split Data ---
-    all_data = fasta2pandas(config["DATA_PATH"])
-    if config.get("small_set", False):
-        all_data = all_data[: config.get("n_test", 10)]
+    train_df = pd.read_csv(train_path)
+    val_df = pd.read_csv(val_path)
 
+    if config["small_set"]:
+        small_set_size = config["n_test"]
+
+        ratio = len(val_df) / len(train_df)
+        train_df = train_df.sample(n=small_set_size, random_state=42)
+        val_df = val_df.sample(n=int(round(small_set_size * ratio)), random_state=42)
+    # --- Build combined DataFrame for label encoding and weight computation ---
     target_cols = config.get("target_labels", [])
-    # Simplify to a single target col if only one is specified
     if isinstance(target_cols, list) and len(target_cols) == 1:
         target_col = target_cols[0]
-        num_classes = all_data[target_col].nunique()
+        combined_df = pd.concat([train_df, val_df], ignore_index=True)
+        num_classes = combined_df[target_col].nunique()
         config.setdefault("model", {})["num_classes"] = num_classes
         logging.info(f"Found {num_classes} unique classes for '{target_col}'.")
     else:
-        # Fallback if multiple or none
         target_col = target_cols if target_cols else "label"
         config.setdefault("model", {})["num_classes"] = 2
         logging.info("Multiple/ambiguous target labels not fully supported; defaulting num_classes=2.")
 
-    label_encoder = LabelEncoder(labels=all_data[target_col])
+    # --- Initialize label encoder using the combined DataFrame ---
+    label_encoder = LabelEncoder(labels=combined_df[target_col])
 
-    train_df, val_df = train_test_split(
-        all_data,
-        test_size=config.get("test_size", 0.1),
-        random_state=42,
-        shuffle=True
-    )
+    # --- Compute per-sample weights for training ---
+    
+    # Use combined_df to ensure all classes are represented
+    class_counts = combined_df[target_col].value_counts().to_dict()
+    
+    # Apply sqrt scaling to tone down extreme differences
+    # class_weights = {cls: 1.0 / np.sqrt(count) for cls, count in class_counts.items()}
 
+    # Apply log scaling to tone down extreme differences
+    class_weights = {cls: 1.0 / np.log(count + 1) for cls, count in class_counts.items()}
+    
+    # Map each training sample's label to its weight
+    sample_weights = train_df[target_col].map(class_weights).tolist()
+
+    
+    sampler = WeightedRandomSampler(sample_weights, num_samples=len(train_df), replacement=True)
+
+    # --- Build datasets ---
     train_set = ClassificationDataset(
         train_df,
         preprocessor=preprocessor,
@@ -143,6 +167,18 @@ def main():
         preprocessor=preprocessor,
         label_encoder=label_encoder,
         target_column=target_col
+    )
+
+    # --- Setup DataLoaders ---
+    batch_size = config["batch_size"]
+    num_workers = min(4, (os.cpu_count() or 1) // 2)
+    trainloader = DataLoader(
+        train_set, batch_size=batch_size, sampler=sampler,
+        num_workers=num_workers, pin_memory=True
+    )
+    valloader = DataLoader(
+        val_set, batch_size=batch_size, shuffle=False,
+        num_workers=num_workers, pin_memory=True
     )
 
     # --- Build BERT encoder and load champion weights ---
@@ -159,6 +195,8 @@ def main():
     )
 
     encoder = BertModel(bert_cfg)
+
+
 
     # Load best pretrained checkpoint
     checkpoint_path = load_pretrained_encoder(config)
@@ -193,17 +231,7 @@ def main():
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     model.to(device)
 
-    # --- Setup DataLoaders ---
-    batch_size = config["batch_size"]
-    num_workers = min(4, (os.cpu_count() or 1) // 2)
-    trainloader = DataLoader(
-        train_set, batch_size=batch_size, shuffle=True,
-        num_workers=num_workers, pin_memory=True
-    )
-    valloader = DataLoader(
-        val_set, batch_size=batch_size, shuffle=False,
-        num_workers=num_workers, pin_memory=True
-    )
+
 
     # --- Setup optimizer & LR schedule ---
     peak_lr = config["peak_lr"]

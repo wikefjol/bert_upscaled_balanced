@@ -60,8 +60,8 @@ base_config_ft = {
             "evaluation": {"strategy": "identity"}
         }
     },
-    "max_epochs": {"fine_tuning": 20},
-    "patience": {"fine_tuning": 10},
+    "max_epochs": {"fine_tuning": 10},
+    "patience": {"fine_tuning": 4},
     "peak_lr": 0.0005,     # will be overridden
     "warmup_epochs": 1,
     "plateau_epochs": 3,
