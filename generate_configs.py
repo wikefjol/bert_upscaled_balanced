@@ -44,7 +44,7 @@ base_config_pt = {
 # Base config for finetuning
 base_config_ft = {
     "DATA_FILE": "unite_reps.fasta",
-    "PROJECT_NAME": "gold_standard_ft",
+    "PROJECT_NAME": "balanced_ft",
     "small_set": False,
     "n_test": 1000,
     "alphabet": ["A", "C", "G", "T"],

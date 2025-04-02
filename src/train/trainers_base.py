@@ -136,12 +136,17 @@ class BaseTrainer(ABC):
 
                 val_loss = val_metrics.get("loss", float("inf"))
                 val_accuracy = val_metrics.get("accuracy", 0.0)
-                grad_norm = val_metrics.get("grad_norm", -1)
+                val_loss_dist = val_metrics.get("dist_loss", float("inf"))
+                val_accuracy_dist = val_metrics.get("dist_accuracy", 0.0)
 
-                # Fetch any additional classification metrics if present
                 val_macro_f1 = val_metrics.get("macro_f1", None)
                 val_weighted_f1 = val_metrics.get("weighted_f1", None)
                 val_bal_acc = val_metrics.get("balanced_accuracy", None)
+
+                val_macro_f1_dist = val_metrics.get("dist_macro_f1", None)
+                val_weighted_f1_dist = val_metrics.get("dist_weighted_f1", None)
+                val_bal_acc_dist = val_metrics.get("dist_balanced_accuracy", None)
+
 
                 # Print header every 5 validation cycles
                 if (epoch % 5) == 0:
@@ -160,6 +165,8 @@ class BaseTrainer(ABC):
                     f"{val_loss:<10.4f} | {val_accuracy:<10.4f} | {current_lr:<8.6f} | "
                     f"{(val_end - train_start):<14.2f} | {vram_percent:<10.2f}%"
                 )
+                row += f" | distLoss: {val_loss_dist:.4f} | distAcc: {val_accuracy_dist:.4f}"
+                
 
                 # Optionally append extra classification metrics on the same line
                 if val_macro_f1 is not None:
@@ -168,19 +175,27 @@ class BaseTrainer(ABC):
                     row += f" | weightedF1: {val_weighted_f1:.4f}"
                 if val_bal_acc is not None:
                     row += f" | balAcc: {val_bal_acc:.4f}"
+                if val_macro_f1_dist is not None:
+                    row += f" | distMacroF1: {val_macro_f1_dist:.4f}"
+                if val_weighted_f1_dist is not None:
+                    row += f" | distWeightedF1: {val_weighted_f1_dist:.4f}"
+                if val_bal_acc_dist is not None:
+                    row += f" | distBalAcc: {val_bal_acc_dist:.4f}"
 
                 print(row)
 
                 # Prepare WandB log dictionary
+
+                grad_norm = val_metrics.get("grad_norm", -1)
                 wb_dict = {
-                    "epoch": epoch + 1,
                     f"train_{task_prefix}_loss": train_metrics["loss"],
                     f"train_{task_prefix}_accuracy": train_metrics["accuracy"],
                     f"val_{task_prefix}_loss": val_loss,
                     f"val_{task_prefix}_accuracy": val_accuracy,
                     "learning_rate": current_lr,
-                    "grad_norm": grad_norm
                 }
+                wb_dict[f"val_dist_{task_prefix}_loss"] = val_loss_dist
+                wb_dict[f"val_dist_{task_prefix}_accuracy"] = val_accuracy_dist
                 # Add classification metrics if present
                 if val_macro_f1 is not None:
                     wb_dict[f"val_{task_prefix}_macro_f1"] = val_macro_f1
@@ -188,6 +203,8 @@ class BaseTrainer(ABC):
                     wb_dict[f"val_{task_prefix}_weighted_f1"] = val_weighted_f1
                 if val_bal_acc is not None:
                     wb_dict[f"val_{task_prefix}_balanced_acc"] = val_bal_acc
+                if val_macro_f1_dist is not None:
+                    wb_dict[f"val_dist_{task_prefix}_macro_f1"] = val_macro_f1_dist
 
                 # Log to Weights & Biases
                 wandb.log(wb_dict)
@@ -228,11 +245,9 @@ class BaseTrainer(ABC):
                 # If we skip validation, just log training metrics to WandB
                 grad_norm = -2
                 wandb.log({
-                    "epoch": epoch + 1,
                     f"train_{task_prefix}_loss": train_metrics["loss"],
                     f"train_{task_prefix}_accuracy": train_metrics["accuracy"],
                     "learning_rate": current_lr,
-                    "grad_norm": grad_norm
                 })
                 self.logger.info(
                     f"Epoch {epoch+1}: Training metrics logged; validation skipped."

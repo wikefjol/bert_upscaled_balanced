@@ -91,8 +91,9 @@ def main():
     args = parser.parse_args()
 
     # TODO: Adapt configs to take in these paths. Or dont. 
-    train_path = "/mimer/NOBACKUP/groups/snic2022-22-552/filbern/data/naive_train.csv"
-    val_path = "/mimer/NOBACKUP/groups/snic2022-22-552/filbern/data/naive_val.csv"
+    train_path = "/mimer/NOBACKUP/groups/snic2022-22-552/filbern/data/final_train_set.csv"
+    val_path_closely = "/mimer/NOBACKUP/groups/snic2022-22-552/filbern/data/closely_related_val_set.csv" 
+    val_path_distantly = "/mimer/NOBACKUP/groups/snic2022-22-552/filbern/data/distantly_related_val_set.csv" 
 
     # Load and expand config
     with open(args.config, "r") as f:
@@ -114,22 +115,24 @@ def main():
     preprocessor = create_preprocessor(config["preprocessing"], vocab, training=True)
 
     train_df = pd.read_csv(train_path)
-    val_df = pd.read_csv(val_path)
+    val_df_closely = pd.read_csv(val_path_closely)
+    val_df_distantly = pd.read_csv(val_path_distantly)
 
     if config["small_set"]:
         small_set_size = config["n_test"]
-
-        ratio = len(val_df) / len(train_df)
+        ratio_close = len(val_df_closely) / len(train_df)
+        ratio_dist = len(val_df_distantly) / len(train_df)
         train_df = train_df.sample(n=small_set_size, random_state=42)
-        val_df = val_df.sample(n=int(round(small_set_size * ratio)), random_state=42)
+        val_df_closely = val_df_closely.sample(n=int(round(small_set_size * ratio_close)), random_state=42)
+        val_df_distantly = val_df_distantly.sample(n=int(round(small_set_size * ratio_dist)), random_state=42)
+
     # --- Build combined DataFrame for label encoding and weight computation ---
     target_cols = config.get("target_labels", [])
     if isinstance(target_cols, list) and len(target_cols) == 1:
         target_col = target_cols[0]
-        combined_df = pd.concat([train_df, val_df], ignore_index=True)
+        combined_df = pd.concat([train_df, val_df_closely, val_df_distantly], ignore_index=True)
         num_classes = combined_df[target_col].nunique()
         config.setdefault("model", {})["num_classes"] = num_classes
-        logging.info(f"Found {num_classes} unique classes for '{target_col}'.")
     else:
         target_col = target_cols if target_cols else "label"
         config.setdefault("model", {})["num_classes"] = 2
@@ -146,8 +149,8 @@ def main():
     # Apply sqrt scaling to tone down extreme differences
     # class_weights = {cls: 1.0 / np.sqrt(count) for cls, count in class_counts.items()}
 
-    # Apply log scaling to tone down extreme differences
-    class_weights = {cls: 1.0 / np.log(count + 1) for cls, count in class_counts.items()}
+    # Apply inverse scaling to tone down extreme differences
+    class_weights = {cls: 1.0 /(count + 1) for cls, count in class_counts.items()}
     
     # Map each training sample's label to its weight
     sample_weights = train_df[target_col].map(class_weights).tolist()
@@ -157,32 +160,26 @@ def main():
 
     # --- Build datasets ---
     train_set = ClassificationDataset(
-        train_df,
-        preprocessor=preprocessor,
-        label_encoder=label_encoder,
-        target_column=target_col
+        train_df, preprocessor=preprocessor, label_encoder=label_encoder, target_column=target_col
     )
-    val_set = ClassificationDataset(
-        val_df,
-        preprocessor=preprocessor,
-        label_encoder=label_encoder,
-        target_column=target_col
+    val_set_closely = ClassificationDataset(
+        val_df_closely, preprocessor=preprocessor, label_encoder=label_encoder, target_column=target_col
     )
+    val_set_distantly = ClassificationDataset(
+        val_df_distantly, preprocessor=preprocessor, label_encoder=label_encoder, target_column=target_col
+    )
+
 
     # --- Setup DataLoaders ---
     batch_size = config["batch_size"]
     num_workers = min(4, (os.cpu_count() or 1) // 2)
-    trainloader = DataLoader(
-        train_set, batch_size=batch_size, sampler=sampler,
-        num_workers=num_workers, pin_memory=True
-    )
-    valloader = DataLoader(
-        val_set, batch_size=batch_size, shuffle=False,
-        num_workers=num_workers, pin_memory=True
-    )
+    trainloader = DataLoader(train_set, batch_size=batch_size, sampler=sampler, num_workers=num_workers, pin_memory=True)
+    valloader_closely = DataLoader(val_set_closely, batch_size=batch_size, shuffle=False, num_workers=num_workers, pin_memory=True)
+    valloader_distantly = DataLoader(val_set_distantly, batch_size=batch_size, shuffle=False, num_workers=num_workers, pin_memory=True)
 
     # --- Build BERT encoder and load champion weights ---
     logging.info("Building encoder for finetuning")
+    
     bert_cfg = BertConfig(
         vocab_size=len(vocab),
         hidden_size=config["model"]["hidden_size"],
@@ -195,12 +192,7 @@ def main():
     )
 
     encoder = BertModel(bert_cfg)
-
-
-
-    # Load best pretrained checkpoint
     checkpoint_path = load_pretrained_encoder(config)
-    logging.info(f"Loading champion encoder from {checkpoint_path}")
     state_dict = torch.load(checkpoint_path, map_location="cpu")
 
     def strip_prefix(sd, prefix="bert."):
@@ -230,8 +222,6 @@ def main():
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     model.to(device)
-
-
 
     # --- Setup optimizer & LR schedule ---
     peak_lr = config["peak_lr"]
@@ -277,14 +267,16 @@ def main():
     finetuner = ClassificationTrainer(
         model=model,
         train_loader=trainloader,
-        val_loader=valloader,
+        # CHANGES: provide two val loaders
+        val_loader=valloader_closely,
+        val_loader_distantly=valloader_distantly,
         num_epochs=config["max_epochs"]["fine_tuning"],
         patience=config["patience"]["fine_tuning"],
         metrics_jsonl_path="finetuning_metrics.jsonl",
         optimizer=optimizer,
         scheduler=scheduler,
         use_amp=True,
-        champs_dir=CHAMPS_DIR,  # for champion saving if desired
+        champs_dir=CHAMPS_DIR,
         earliest_champion_epoch=1,
         earliest_stop_epoch=2 * config.get("plateau_epochs", 1),
         config=config
