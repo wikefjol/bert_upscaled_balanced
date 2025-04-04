@@ -36,7 +36,7 @@
         "augmentation": {
             "training": {
                 "strategy": "base",
-                "modification_probability": 0
+                "modification_probability": 0.05
             },
             "evaluation": {
                 "strategy": "identity"

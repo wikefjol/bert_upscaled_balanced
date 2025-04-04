@@ -9,7 +9,7 @@ config_file = "model_configurations.json"
 with open(config_file, "r") as f:
     models_data = json.load(f)
 
-# Base config for pretraining (from previous working version)
+# Base config for pretraining (only pretraining keys remain)
 base_config_pt = {
     "DATA_FILE": "unite_reps.fasta",
     "PROJECT_NAME": "gold_standard_pt",
@@ -28,8 +28,8 @@ base_config_pt = {
             "evaluation": {"strategy": "identity"}
         }
     },
-    "max_epochs": {"pre_training": 600, "fine_tuning": 0},
-    "patience": {"pre_training": 10, "fine_tuning": 10},
+    "max_epochs": {"pre_training": 600},
+    "patience": {"pre_training": 10},
     "peak_lr": 5e-3,      # will be overridden
     "warmup_epochs": 3,
     "plateau_epochs": 50,
@@ -41,7 +41,7 @@ base_config_pt = {
     "system_log_lvl": 20
 }
 
-# Base config for finetuning
+# Base config for finetuning (only finetuning keys remain)
 base_config_ft = {
     "DATA_FILE": "unite_reps.fasta",
     "PROJECT_NAME": "balanced_ft",
@@ -49,7 +49,7 @@ base_config_ft = {
     "n_test": 1000,
     "alphabet": ["A", "C", "G", "T"],
     "max_sequence_length": 600,
-    "target_labels": ["species"],
+    "target_labels": ["genus"],
     "model": {},  # to be replaced with hyperparams from JSON
     "preprocessing": {
         "tokenization": {"strategy": "kmer", "k": 6, "overlapping": False},
@@ -102,14 +102,16 @@ for model_id, model_config in models_data.items():
             config["peak_lr"] = mapping["peak_lr"]
 
             # Filename: k{k}_{ov|no}_pt_{layers}layers_{hidden_size}dim_{intermediate}int_{heads}heads.json
-            file_name = (f"k{k}_{ov_key}_pt_{hyperparams['num_layers']}layers_"
-                         f"{hyperparams['hidden_size']}dim_{hyperparams['intermediate_size']}int_"
-                         f"{hyperparams['num_attention_heads']}heads.json")
+            file_name = (
+                f"k{k}_{ov_key}_pt_{hyperparams['num_layers']}layers_"
+                f"{hyperparams['hidden_size']}dim_{hyperparams['intermediate_size']}int_"
+                f"{hyperparams['num_attention_heads']}heads.json"
+            )
             file_path = os.path.join(model_folder, file_name)
             with open(file_path, "w") as f:
                 json.dump(config, f, indent=4)
 
-        # Finetuning configs (include _g_ in filename)
+        # Finetuning configs
         for k in range(1, 8):
             config = copy.deepcopy(base_config_ft)
             config["preprocessing"]["tokenization"]["k"] = k
@@ -119,9 +121,11 @@ for model_id, model_config in models_data.items():
             config["peak_lr"] = mapping["peak_lr"]
 
             # Filename: k{k}_{ov|no}_ft_g_{layers}layers_{hidden_size}dim_{intermediate}int_{heads}heads.json
-            file_name = (f"k{k}_{ov_key}_ft_s_{hyperparams['num_layers']}layers_"
-                         f"{hyperparams['hidden_size']}dim_{hyperparams['intermediate_size']}int_"
-                         f"{hyperparams['num_attention_heads']}heads.json")
+            file_name = (
+                f"k{k}_{ov_key}_ft_g_{hyperparams['num_layers']}layers_"
+                f"{hyperparams['hidden_size']}dim_{hyperparams['intermediate_size']}int_"
+                f"{hyperparams['num_attention_heads']}heads.json"
+            )
             file_path = os.path.join(model_folder, file_name)
             with open(file_path, "w") as f:
                 json.dump(config, f, indent=4)

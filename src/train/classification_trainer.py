@@ -1,3 +1,5 @@
+# src/train/classification_trainer.py
+
 import torch
 import torch.nn as nn
 import torch.optim as optim
@@ -12,7 +14,7 @@ class ClassificationTrainer(BaseTrainer):
         self,
         model,
         train_loader,
-        # CHANGES: val_loader is "closely", add val_loader_distantly for "distant" set
+        # val_loader is for closely related data; val_loader_distantly for distant set (optional)
         val_loader,
         val_loader_distantly=None,
         optimizer=None,
@@ -25,7 +27,7 @@ class ClassificationTrainer(BaseTrainer):
         super().__init__(
             model=model,
             train_loader=train_loader,
-            val_loader=val_loader,      # "closely" set becomes the base-trainer's official val_loader
+            val_loader=val_loader,  # the primary validation set
             optimizer=optimizer,
             scheduler=scheduler,
             **kwargs
@@ -68,22 +70,17 @@ class ClassificationTrainer(BaseTrainer):
 
     def _validate_epoch(self, epoch_nr):
         metrics_closely = self._eval_single_val_loader(self.val_loader)
-        # If we don’t have a second loader, skip it
         if self.val_loader_distantly is not None:
             metrics_distantly = self._eval_single_val_loader(self.val_loader_distantly)
         else:
             metrics_distantly = {}
-
-        # Merge them: champion logic sees .get("loss") and .get("accuracy") from the closely set
-        # The “distant” ones are stored under “dist_*”
+        # Merge metrics: primary metrics and distant set prefixed with "dist_"
         combined = {
             "loss": metrics_closely["loss"],
             "accuracy": metrics_closely["accuracy"],
             "macro_f1": metrics_closely["macro_f1"],
             "weighted_f1": metrics_closely["weighted_f1"],
             "balanced_accuracy": metrics_closely["balanced_accuracy"],
-
-            # Add "dist_" prefix for the second dataset
             "dist_loss": metrics_distantly.get("loss", 0.0),
             "dist_accuracy": metrics_distantly.get("accuracy", 0.0),
             "dist_macro_f1": metrics_distantly.get("macro_f1", 0.0),
@@ -107,7 +104,6 @@ class ClassificationTrainer(BaseTrainer):
                 preds = logits.argmax(dim=-1)
                 all_preds.extend(preds.cpu().numpy())
                 all_labels.extend(labels.cpu().numpy())
-
         avg_loss = total_loss / len(loader)
         accuracy = np.mean(np.array(all_preds) == np.array(all_labels))
         macro_f1 = f1_score(all_labels, all_preds, average="macro")

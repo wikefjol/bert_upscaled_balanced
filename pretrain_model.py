@@ -17,6 +17,7 @@ from src.utils.vocab import Vocabulary, KmerVocabConstructor
 from src.factories.preprocessing_factory import create_preprocessor
 from src.model.backbone import ModularBertax
 from src.model.heads import MLMHead
+from src.utils.config_utils import expand_config  # new unified config expansion
 
 load_dotenv()
 
@@ -34,6 +35,15 @@ def nest_dotted_keys(flat_dict):
             current[parts[-1]] = value
     return nested
 
+def recursive_update(base, updates):
+    """Deep-merge wandb updates into the base config."""
+    for k, v in updates.items():
+        if isinstance(v, dict) and k in base and isinstance(base[k], dict):
+            recursive_update(base[k], v)
+        else:
+            base[k] = v
+    return base
+
 def create_lr_lambda(steps_per_epoch, warmup_epochs, plateau_epochs, decay_epochs, peak_lr, final_lr):
     """Create a piecewise LR schedule for warmup, plateau, and decay."""
     def lr_lambda(current_step):
@@ -49,43 +59,6 @@ def create_lr_lambda(steps_per_epoch, warmup_epochs, plateau_epochs, decay_epoch
             return final_lr / peak_lr
     return lr_lambda
 
-def expand_config(cfg):
-    """
-    Expands config with derived fields and environment paths.
-    For overlapping k-mers, we multiply max_sequence_length by k.
-    """
-    try:
-        if cfg["preprocessing"]["tokenization"]["overlapping"]:
-            cfg["max_sequence_length"] = cfg["max_sequence_length"] * cfg["preprocessing"]["tokenization"]["k"]
-        # Ensure tokenization and augmentation have the alphabet
-        cfg.setdefault("preprocessing", {}).setdefault("tokenization", {})["alphabet"] = cfg["alphabet"]
-        cfg["preprocessing"].setdefault("augmentation", {}).setdefault("training", {})["alphabet"] = cfg["alphabet"]
-        cfg["preprocessing"]["augmentation"].setdefault("evaluation", {})["alphabet"] = cfg["alphabet"]
-
-        k = cfg["preprocessing"]["tokenization"]["k"]
-        cfg["model"]["max_position_embeddings"] = cfg["max_sequence_length"] // k + 2
-        optimal = cfg["max_sequence_length"] // k
-        cfg["preprocessing"].setdefault("padding", {})["optimal_length"] = optimal
-        cfg["preprocessing"].setdefault("truncation", {})["optimal_length"] = optimal
-
-        data_dir = os.getenv("DATA_DIR")
-        if not data_dir:
-            raise ValueError("DATA_DIR is not set in the environment (.env)")
-        cfg["DATA_PATH"] = os.path.join(data_dir, cfg["DATA_FILE"])
-    except KeyError as e:
-        logging.error("Missing key during config expansion: %s", e)
-        raise e
-    return cfg
-
-def recursive_update(base, updates):
-    """Deep-merge wandb updates into the base config."""
-    for k, v in updates.items():
-        if isinstance(v, dict) and k in base and isinstance(base[k], dict):
-            recursive_update(base[k], v)
-        else:
-            base[k] = v
-    return base
-
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--config", type=str, required=True, help="Path to the pretraining configuration JSON file")
@@ -96,31 +69,25 @@ def main():
     with open(config_file, "r") as f:
         base_config = json.load(f)
 
-    # Initialize wandb with the base config
     wandb.init(project=base_config.get("PROJECT_NAME", "default_project"), config=base_config)
-    raw_updates = dict(wandb.config)  # wandb overrides
+    raw_updates = dict(wandb.config)
     updates_nested = nest_dotted_keys(raw_updates)
     config = recursive_update(base_config, updates_nested)
-    config = expand_config(config)
+    # Expand config for pretraining
+    config = expand_config(config, mode="pretrain")
 
     logging.basicConfig(level=config.get("system_log_lvl", logging.INFO))
     champs_dir = "/mimer/NOBACKUP/groups/snic2022-22-552/filbern/champs"
 
-    # --- Build vocabulary ---
     logging.info("Building vocabulary")
-    constructor = KmerVocabConstructor(
-        k=config["preprocessing"]["tokenization"]["k"],
-        alphabet=config["alphabet"]
-    )
+    constructor = KmerVocabConstructor(k=config["preprocessing"]["tokenization"]["k"], alphabet=config["alphabet"])
     vocab = Vocabulary()
     vocab.build_from_constructor(constructor, data=[])
 
-    # --- Build preprocessors ---
     logging.info("Building preprocessors")
     train_preprocessor = create_preprocessor(config["preprocessing"], vocab, training=True)
     val_preprocessor = create_preprocessor(config["preprocessing"], vocab, training=False)
 
-    # --- Load & split data ---
     logging.info(f"Loading data from {config['DATA_PATH']}")
     all_data = fasta2pandas(config["DATA_PATH"])
     if config.get("small_set", False):
@@ -143,7 +110,6 @@ def main():
         masking_percentage=config.get("masking_percentage", 0.15)
     )
 
-    # --- Build model ---
     logging.info("Building model components")
     bert_cfg = BertConfig(
         vocab_size=len(vocab),
@@ -163,22 +129,16 @@ def main():
         dropout_rate=config["model"].get("mlm_dropout_rate", config["model"]["dropout_rate"])
     )
     model = ModularBertax(encoder=encoder, mlm_head=mlm_head, classification_head=None)
-    # Mark the mode so the BaseTrainer knows to use pretrain logic
     model.mode = "pretrain"
 
-    # --- Setup device ---
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     model.to(device)
 
-    # --- Build DataLoaders ---
     logging.info("Setting up DataLoaders")
     batch_size = config["batch_size"]
     accumulation_steps = config.get("accumulation_steps", 1)
     num_workers = max(4, (os.cpu_count() or 1) // 4)
-    print(
-        f'K: {config["preprocessing"]["tokenization"]["k"]}, '
-        f"Batch size: {batch_size}, num_workers: {num_workers}"
-    )
+    print(f'K: {config["preprocessing"]["tokenization"]["k"]}, Batch size: {batch_size}, num_workers: {num_workers}')
 
     mlm_trainloader = DataLoader(
         mlm_train_set,
@@ -195,7 +155,6 @@ def main():
         pin_memory=True
     )
 
-    # --- Setup optimizer & scheduler ---
     steps_per_epoch = max(1, len(mlm_trainloader) // accumulation_steps)
     peak_lr = wandb.config.get("peak_lr", config["peak_lr"])
     optimizer = torch.optim.AdamW(model.parameters(), lr=peak_lr)
@@ -219,7 +178,6 @@ def main():
         "num_workers": num_workers
     }, allow_val_change=True)
 
-    # --- Initialize trainer & train ---
     logging.info("Initializing MLMTrainer for pretraining")
     pretrainer = MLMTrainer(
         model=model,
@@ -232,8 +190,8 @@ def main():
         scheduler=scheduler,
         use_amp=True,
         accumulation_steps=accumulation_steps,
-        champs_dir=champs_dir,               # needed for champion logic
-        earliest_champion_epoch=1,           # start checking champions early
+        champs_dir=champs_dir,
+        earliest_champion_epoch=1,
         earliest_stop_epoch=2 * config.get("plateau_epochs", 1),
         config=config
     )

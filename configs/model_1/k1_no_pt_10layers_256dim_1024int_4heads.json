@@ -44,12 +44,10 @@
         }
     },
     "max_epochs": {
-        "pre_training": 600,
-        "fine_tuning": 0
+        "pre_training": 600
     },
     "patience": {
-        "pre_training": 10,
-        "fine_tuning": 10
+        "pre_training": 10
     },
     "peak_lr": 0.0007,
     "warmup_epochs": 3,

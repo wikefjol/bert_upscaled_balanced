@@ -7,8 +7,8 @@ from filelock import FileLock
 
 def build_champion_key(mode, config):
     """
-    Build a unique key for pretrain/finetune + 
-    (k, overlapping, num_layers, heads, hidden_size, intermediate_size).
+    Build a unique key for pretrain/finetune using:
+    (k, overlapping, num_layers, num_attention_heads, hidden_size, intermediate_size).
     """
     model_cfg = config["model"]
     token_cfg = config["preprocessing"]["tokenization"]
@@ -26,13 +26,32 @@ def build_champion_key(mode, config):
 def get_run_id(champion_key, config):
     """
     Derive a stable folder ID from the champion key plus model config.
-    We hash only the 'model' section for uniqueness.
+    Only the 'model' section is hashed for uniqueness.
     """
     model_str = json.dumps(config["model"], sort_keys=True)
     config_hash = hashlib.md5(model_str.encode("utf-8")).hexdigest()[:6]
     return f"{champion_key}_{config_hash}"
 
-def save_champion(model, config, epoch, champion_key, champs_dir,label_encoder):
+def save_champion(model, config, epoch, champion_key, champs_dir, label_encoder):
+    """
+    Save a champion checkpoint for pretraining.
+    
+    Parameters:
+      - model: the model instance.
+      - config: the training configuration.
+      - epoch: current epoch number.
+      - champion_key: unique key identifying this run.
+      - champs_dir: directory to store champion checkpoints.
+      - label_encoder: optional label encoder; for pretraining this is typically None.
+    
+    Saves:
+      - Model checkpoint (encoder_best.pt)
+      - If provided, the label encoder mapping (label_encoder.json)
+      - The config (config_best.json)
+    
+    Returns:
+      Tuple(checkpoint_path, config_path)
+    """
     run_id = get_run_id(champion_key, config)
     run_folder = os.path.join(champs_dir, run_id)
     os.makedirs(run_folder, exist_ok=True)
@@ -69,26 +88,19 @@ def update_champion_metadata(
     mode
 ):
     """
-    Update champion metadata for this champion_key. 
-    We keep up to 4 total entries (champion + 3 runner-ups),
-    sorting by ascending val_metric if mode == 'pretrain' 
-    or descending if mode == 'finetune'.
-
-    champion_key: output of build_champion_key()
-    new_val_metric: float (loss or accuracy)
-    champion_metric_name: 'val_loss' or 'val_accuracy'
-    mode: 'pretrain' or 'finetune'
+    Update champion metadata for this champion_key.
+    For pretraining (mode 'pretrain'), lower loss is better.
+    
+    Keeps up to 4 entries (champion + 3 runner-ups).
     """
     lock_path = metadata_path + ".lock"
     with FileLock(lock_path):
-        # Load existing metadata
         if os.path.exists(metadata_path):
             with open(metadata_path, "r") as f:
                 metadata = json.load(f)
         else:
             metadata = {}
 
-        # Ensure there's a place to store multiple entries
         if champion_key not in metadata:
             metadata[champion_key] = {"entries": []}
 
@@ -104,20 +116,15 @@ def update_champion_metadata(
             "mode": mode
         }
 
-        # Insert the new result
         champion_data.insert(0, new_entry)
-        # Sort ascending for pretrain (lower loss is better), descending for finetune (higher acc is better)
         if mode == "pretrain":
             champion_data.sort(key=lambda x: x["val_metric"])
         else:
             champion_data.sort(key=lambda x: x["val_metric"], reverse=True)
 
-        # Keep top 4
         champion_data[:] = champion_data[:4]
 
-        # Write updated metadata
         with open(metadata_path, "w") as f:
             json.dump(metadata, f, indent=2)
 
-        # The best champion is champion_data[0]
         return champion_data[0]
