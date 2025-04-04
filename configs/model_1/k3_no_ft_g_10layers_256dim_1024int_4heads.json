@@ -1,6 +1,6 @@
 {
     "DATA_FILE": "unite_reps.fasta",
-    "PROJECT_NAME": "gold_standard_ft",
+    "PROJECT_NAME": "balanced_ft",
     "small_set": false,
     "n_test": 1000,
     "alphabet": [

@@ -220,12 +220,14 @@ class BaseTrainer(ABC):
                     if self.compare_fn(current_metric, self.best_metric):
                         self.best_metric = current_metric
                         self.no_improvement_count = 0
+                        label_encoder = self.train_loader.dataset.label_encoder
                         checkpoint_path, config_path = save_champion(
                             self.model,
                             self.config,
                             epoch + 1,
                             self.champion_key,
-                            self.champs_dir
+                            self.champs_dir,
+                            label_encoder
                         )
                         update_champion_metadata(
                             metadata_path=self.metadata_path,

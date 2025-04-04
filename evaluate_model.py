@@ -50,13 +50,32 @@ def evaluate_model(model, data_loader, device, criterion=None):
         "balanced_accuracy": balanced_accuracy_score(all_labels, all_preds)
     }
 
+def get_prediction_table(model, data_loader, device, label_encoder):
+    model.eval()
+    records = []
+    sample_id = 0
+    with torch.no_grad():
+        for batch in data_loader:
+            input_ids = batch["input_ids"].to(device)
+            attention_mask = batch["attention_mask"].to(device)
+            true_labels = batch["encoded_label"].to(device).long()
+            logits = model(input_ids, attention_mask)
+            preds = logits.argmax(dim=-1)
+            for t, p in zip(true_labels.cpu().numpy(), preds.cpu().numpy()):
+                records.append({
+                    "sample_id": sample_id,
+                    "true_label": label_encoder.decode(int(t)),
+                    "predicted_label": label_encoder.decode(int(p))
+                })
+                sample_id += 1
+    return pd.DataFrame(records)
+
 def choose_champion():
-    # Load champions.json and filter classification champions.
     if not os.path.exists(CHAMPIONS_FILE):
         raise ValueError(f"No champions.json found at {CHAMPIONS_FILE}")
     with open(CHAMPIONS_FILE, "r") as f:
         champs_data = json.load(f)
-    classify_keys = [k for k in champs_data.keys() if k.startswith("classify_")]
+    classify_keys = [k for k in champs_data if k.startswith("classify_")]
     if not classify_keys:
         raise ValueError("No classification champions found.")
     print("Available classification champions:")
@@ -70,41 +89,45 @@ def choose_champion():
     except ValueError:
         raise ValueError("Invalid selection.")
     chosen_key = classify_keys[idx]
-    # Use the first entry (assumed best)
     entry = champs_data[chosen_key]["entries"][0]
-    return entry  # contains "config_path", "checkpoint_path", etc.
+    return entry
 
 def main():
-    # Choose champion by enumerating in terminal.
     entry = choose_champion()
     config_path = entry["config_path"]
     checkpoint_path = entry["checkpoint_path"]
     logging.info(f"Selected champion config: {config_path}")
     logging.info(f"Selected champion weights: {checkpoint_path}")
     
-    # Load expanded config from config_path
     with open(config_path, "r") as f:
         config = json.load(f)
     
-    # Build vocabulary & preprocessor from the champion config.
     k_val = config["preprocessing"]["tokenization"]["k"]
     constructor = KmerVocabConstructor(k=k_val, alphabet=config["alphabet"])
     vocab = Vocabulary()
     vocab.build_from_constructor(constructor, data=[])
     preprocessor = create_preprocessor(config["preprocessing"], vocab, training=False)
     
-    # Read evaluation CSV
     eval_csv = input(f"Enter evaluation CSV path (or press Enter to use default: {DEFAULT_EVAL_CSV}): ").strip()
     if not eval_csv:
         eval_csv = DEFAULT_EVAL_CSV
     logging.info(f"Using evaluation CSV: {eval_csv}")
     df_eval = pd.read_csv(eval_csv)
     
-    # Use target column from config.
     target_cols = config.get("target_labels", ["label"])
     target_col = target_cols[0] if isinstance(target_cols, list) else target_cols
     logging.info(f"Using target column '{target_col}' with champion num_classes {config['model'].get('num_classes')}")
-    label_encoder = LabelEncoder(labels=df_eval[target_col])
+    
+    # Use saved label encoder mapping if available; otherwise, build from eval CSV.
+    if "label_encoder_path" in config and os.path.exists(config["label_encoder_path"]):
+        logging.info(f"Loading label encoder from {config['label_encoder_path']}")
+        with open(config["label_encoder_path"], "r") as f:
+            mapping_data = json.load(f)
+        label_encoder = LabelEncoder.__new__(LabelEncoder)
+        label_encoder.label_to_index = mapping_data["label_to_index"]
+        label_encoder.index_to_label = {int(k): v for k, v in mapping_data["index_to_label"].items()}
+    else:
+        label_encoder = LabelEncoder(labels=df_eval[target_col])
     
     eval_dataset = ClassificationDataset(
         df_eval,
@@ -118,7 +141,6 @@ def main():
         shuffle=False, num_workers=2, pin_memory=True
     )
     
-    # Rebuild model from the champion config.
     bert_cfg = BertConfig(
         vocab_size=len(vocab),
         hidden_size=config["model"]["hidden_size"],
@@ -141,21 +163,25 @@ def main():
     model.classifyMode()
     model.to(device)
     
-    # Load champion weights.
     logging.info(f"Loading champion weights from: {checkpoint_path}")
     state_dict = torch.load(checkpoint_path, map_location=device)
     model.load_state_dict(state_dict, strict=False)
     
-    # Extract champion's num_classes.
     champ_num_classes = model.classification_head.sequential[-1].out_features
     logging.info(f"Champion model expects {champ_num_classes} classes.")
     if df_eval[target_col].nunique() != champ_num_classes:
         logging.warning(f"Evaluation CSV has {df_eval[target_col].nunique()} unique classes but champion expects {champ_num_classes}.")
     
-    # Evaluate.
     criterion = torch.nn.CrossEntropyLoss()
     metrics = evaluate_model(model, eval_loader, device, criterion)
     logging.info(f"Evaluation metrics: {metrics}")
+    
+    # Save per-sample predictions table to CSV
+    pred_table = get_prediction_table(model, eval_loader, device, label_encoder)
+    out_csv = input("Enter path to save predictions CSV (default: predictions.csv): ").strip() or "predictions.csv"
+    pred_table.to_csv(out_csv, index=False)
+    logging.info(f"Saved predictions table to {out_csv}")
+    
     print("---- Evaluation Results ----")
     for k, v in metrics.items():
         if isinstance(v, (int, float)) and v is not None:

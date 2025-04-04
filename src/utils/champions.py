@@ -32,19 +32,25 @@ def get_run_id(champion_key, config):
     config_hash = hashlib.md5(model_str.encode("utf-8")).hexdigest()[:6]
     return f"{champion_key}_{config_hash}"
 
-def save_champion(model, config, epoch, champion_key, champs_dir):
-    """
-    Saves a model checkpoint + config in a stable, hashed run folder
-    (one folder per champion_key + model config).
-    Overwrites 'encoder_best.pt' and 'config_best.json' each time.
-    Returns (checkpoint_path, config_path).
-    """
+def save_champion(model, config, epoch, champion_key, champs_dir,label_encoder):
     run_id = get_run_id(champion_key, config)
     run_folder = os.path.join(champs_dir, run_id)
     os.makedirs(run_folder, exist_ok=True)
 
     checkpoint_path = os.path.join(run_folder, "encoder_best.pt")
     torch.save(model.state_dict(), checkpoint_path)
+
+    # Save label mapping if available
+    if label_encoder is not None:
+        mapping_path = os.path.join(run_folder, "label_encoder.json")
+        mapping_data = {
+            "label_to_index": label_encoder.label_to_index,
+            "index_to_label": label_encoder.index_to_label,
+        }
+        with open(mapping_path, "w") as f:
+            json.dump(mapping_data, f, indent=2)
+        # Optionally record mapping path in config for later use
+        config["label_encoder_path"] = mapping_path
 
     config_path = os.path.join(run_folder, "config_best.json")
     with open(config_path, "w") as f:

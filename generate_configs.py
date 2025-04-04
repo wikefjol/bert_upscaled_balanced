@@ -49,7 +49,7 @@ base_config_ft = {
     "n_test": 1000,
     "alphabet": ["A", "C", "G", "T"],
     "max_sequence_length": 600,
-    "target_labels": ["genus"],
+    "target_labels": ["species"],
     "model": {},  # to be replaced with hyperparams from JSON
     "preprocessing": {
         "tokenization": {"strategy": "kmer", "k": 6, "overlapping": False},
@@ -119,7 +119,7 @@ for model_id, model_config in models_data.items():
             config["peak_lr"] = mapping["peak_lr"]
 
             # Filename: k{k}_{ov|no}_ft_g_{layers}layers_{hidden_size}dim_{intermediate}int_{heads}heads.json
-            file_name = (f"k{k}_{ov_key}_ft_g_{hyperparams['num_layers']}layers_"
+            file_name = (f"k{k}_{ov_key}_ft_s_{hyperparams['num_layers']}layers_"
                          f"{hyperparams['hidden_size']}dim_{hyperparams['intermediate_size']}int_"
                          f"{hyperparams['num_attention_heads']}heads.json")
             file_path = os.path.join(model_folder, file_name)

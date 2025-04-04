@@ -3,6 +3,8 @@ __pycache__/
 *.py[cod]
 *$py.class
 
+sbatch_logs/
+configs/
 # Ignore wandb logs and generated files
 wandb/
 
